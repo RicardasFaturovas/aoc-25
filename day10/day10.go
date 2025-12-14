@@ -159,10 +159,166 @@ func togglesToOps(toggles []string) [][]int {
 	return ops
 }
 
+type Result struct {
+	Total int   // minimal total operations
+	K     []int // counts per operation (length = m)
+}
+
+const IMPOSSIBLE_COUNT = 100_000
+
+type Solver struct {
+	parityMap map[int][]int // parity effect -> list of button masks
+	buttons   []int         // operations as bitmasks
+	memo      map[string]int
+	m         int // number of indices
+}
+
+// NewSolver builds the parity map from ops
+func NewSolver(ops [][]int, m int) *Solver {
+	buttonMasks := make([]int, len(ops))
+	for j, op := range ops {
+		mask := 0
+		for _, idx := range op {
+			mask |= 1 << (m - 1 - idx) // reverse index
+		}
+		buttonMasks[j] = mask
+	}
+
+	parityMap := make(map[int][]int)
+	total := 1 << len(buttonMasks)
+	for mask := range total {
+		parityEffect := 0
+		for i := range buttonMasks {
+			if (mask & (1 << i)) != 0 {
+				parityEffect ^= buttonMasks[len(buttonMasks)-1-i]
+			}
+		}
+		parityMap[parityEffect] = append(parityMap[parityEffect], mask)
+	}
+
+	return &Solver{
+		parityMap: parityMap,
+		buttons:   buttonMasks,
+		memo:      make(map[string]int),
+		m:         m,
+	}
+}
+
+func listKey(v []int) string {
+	parts := make([]string, len(v))
+	for i, x := range v {
+		parts[i] = fmt.Sprintf("%d", x)
+	}
+	return strings.Join(parts, ",")
+}
+
+func (s *Solver) Solve(target []int) int {
+	key := listKey(target)
+	if val, ok := s.memo[key]; ok {
+		return val
+	}
+
+	allZero := true
+	for _, x := range target {
+		if x != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		s.memo[key] = 0
+		return 0
+	}
+
+	for _, x := range target {
+		if x < 0 {
+			s.memo[key] = IMPOSSIBLE_COUNT
+			return IMPOSSIBLE_COUNT
+		}
+	}
+
+	// compute parity
+	parity := 0
+	for _, x := range target {
+		parity = (parity << 1) | (x & 1)
+	}
+
+	opsMasks, ok := s.parityMap[parity]
+	if !ok {
+		s.memo[key] = IMPOSSIBLE_COUNT
+		return IMPOSSIBLE_COUNT
+	}
+
+	minPresses := IMPOSSIBLE_COUNT
+
+	for _, mask := range opsMasks {
+		remaining := subtractButtonPress(target, mask, s.buttons, s.m)
+		halved := halveAll(remaining)
+		sub := s.Solve(halved)
+		total := bitsCount(mask) + 2*sub
+		if total < minPresses {
+			minPresses = total
+		}
+	}
+
+	s.memo[key] = minPresses
+	return minPresses
+}
+
+func bitsCount(x int) int {
+	count := 0
+	for x > 0 {
+		count += x & 1
+		x >>= 1
+	}
+	return count
+}
+
+func halveAll(v []int) []int {
+	out := make([]int, len(v))
+	for i, x := range v {
+		out[i] = x / 2
+	}
+	return out
+}
+
+func subtractButtonPress(target []int, mask int, buttons []int, m int) []int {
+	out := append([]int(nil), target...)
+	buttonIndex := len(buttons) - 1
+	x := mask
+
+	for x > 0 {
+		if (x & 1) != 0 {
+			val := buttons[buttonIndex]
+			countIndex := m - 1
+			for val > 0 {
+				if val&1 != 0 {
+					out[countIndex]--
+				}
+				val >>= 1
+				countIndex--
+			}
+		}
+		x >>= 1
+		buttonIndex--
+	}
+	return out
+}
+
 func main() {
 	contents, _ := os.ReadFile("day10Input.txt")
 	result := processMachines(strings.TrimSpace(string(contents)))
-
 	fmt.Println("Total minimum toggles:", result)
-	// Part 2 - skill issue
+
+	// Part 2 - credit to veidom
+	switchMachines := parseVectorInput(strings.TrimSpace(string(contents)))
+	total := 0
+	for i, sm := range switchMachines {
+		println("Processing machine with index:", i)
+		solver := NewSolver(sm.Toggles, len(sm.Target))
+		minSteps := solver.Solve(sm.Target)
+		total += minSteps
+	}
+	fmt.Println("Total min steps", total)
+
 }
